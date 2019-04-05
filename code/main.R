@@ -9,8 +9,8 @@
 
 
 # Libraries and Options ---------------------------------------------------
+setwd("C://users//jmiller//Desktop//response_modeling//")
 source("code//libraries_options_functions.R")
-
 
 # Extract Raw Data --------------------------------------------------------
 source("..//code//pull_data.R")
