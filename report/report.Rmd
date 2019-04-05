@@ -63,211 +63,209 @@ For the purposes of this interview I'd like to both show a competition-suitable 
 
 ## Methodology
 
-A multi-phase ensemble strategy employed to validate and compare several specifications, base learner algorithms 
+A multi-phase ensemble strategy employed to validate and compare several specifications and base learner algorithms.
 
+Repeated K-fold CV was performed in-sample. Some algorithms further employed bagging and boosting as training-time CV.
+
+A full 50% of the data was held out for final validation.
 
 
 ## EDA
 
-#### The proportion of NA values.
-```{r warning=FALSE, message=FALSE}
-train <- readRDS("train.RDS")
-test  <- readRDS("test.RDS")
-length(train[is.na(train)])/(ncol(train)*nrow(train)) 
-```
+Given extremely limited time to work on this presentation, EDA was kept minimal. In major real-world projects, I typically take the opposite approach. In this case there was also a wealth of existing EDA.
 
-Check for dupicate rows.
-```{r warning=FALSE, message=FALSE}
-nrow(train) - nrow(unique(train))
-```
+Let's review a few useful data visualizations that came from EDA.
 
-Lets look at the columns with only one unique value.
-```{r warning=FALSE, message=FALSE}
-col_ct = sapply(train, function(x) length(unique(x)))
-cat("Constant feature count:", length(col_ct[col_ct==1]))
-# we can just remove these columns
-train = train[, !names(train) %in% names(col_ct[col_ct==1])]
-```
+A Pearson correlation matrix using heatmap coloring, performed on 100 randomly sampled features:
 
-Identify and separate the numeric and non numeric rows.
-```{r warning=FALSE, message=FALSE}
-train_numr = train[, sapply(train, is.numeric)]
-train_char = train[, sapply(train, is.character)]
-cat("Numerical column count : ", dim(train_numr)[2], 
-    "; Character column count : ", dim(train_char)[2])
-```
+![](../images/corr.png)
 
-Lets digs into the character features. 
-```{r  warning=FALSE, message=FALSE}
-str(lapply(train_char, unique), vec.len = 4)
-```
+The Spearman equivalent:
 
-It looks like NA is represented in character columns by -1 or [] or blank values, lets convert these to explicit NAs.
-Not entirely sure this is the right thing to do as there are real NA values, as well as -1 values already existing, however it can be tested in predictive performance.
-```{r  warning=FALSE, message=FALSE}
-train_char[train_char==-1] = NA
-train_char[train_char==""] = NA
-train_char[train_char=="[]"] = NA
-```
+![Spearman Correlation Matrix](../images/spearman.png)
 
-We place the date columns in a new dataframe and parse the dates
-```{r  warning=FALSE, message=FALSE}
-train_date = train_char[,grep("JAN1|FEB1|MAR1", train_char),]
-```
 
-Now lets separate out the dates from the character columns and look at them further.
-```{r  warning=FALSE, message=FALSE}
-train_char = train_char[, !colnames(train_char) %in% colnames(train_date)]
-train_date = sapply(train_date, function(x) strptime(x, "%d%B%y:%H:%M:%S"))
-train_date = do.call(cbind.data.frame, train_date)
-```
+Plotting of apparent geographic features on a map space:
 
-Take out the times to a different data frame.
-```{r  warning=FALSE, message=FALSE}
-train_time = train_date[,colnames(train_date) %in% c("VAR_0204","VAR_0217")]
-train_time = data.frame(sapply(train_time, function(x) strftime(x, "%H:%M:%S")))
-train_hour = as.data.frame(sapply(train_time, function(x) as.numeric(as.character(substr( x ,1, 2)))))
-```
-  
-Plot histogram of dates.
-```{r  warning=FALSE, message=FALSE,  fig.width = 8, fig.height = 6}
-par(mar=c(2,2,2,2),mfrow=c(4,4))
-for(i in 1:16) hist(train_date[,i], "weeks", format = "%d %b %y", main = colnames(train_date)[i], xlab="", ylab="")
-```
+![Anonymized Geographic Features](../images/maps.png)
 
-  
-Plot histogram of times.
-```{r  warning=FALSE, message=FALSE,  fig.width = 5, fig.height = 3}
-par(mar=c(2,2,2,2),mfrow=c(1,2))
-for(i in 1:2) hist(train_hour[,i], main = paste(colnames(train_hour)[i], "hourly"), breaks = c(0:24), xlab="", ylab="")
-```
-  
-Here we take a look at the geographical break down of the state features.
-```{r  warning=FALSE, message=FALSE,  fig.width = 10, fig.height = 5}
-mapUSA <- map('state', fill=TRUE, plot=FALSE)
-nms <- sapply(strsplit(mapUSA$names,  ':'),  function(x)x[1])
-USApolygons <- map2SpatialPolygons(mapUSA,  IDs = nms,  CRS('+proj=longlat'))
+As both EDA and feature generation, I measured counts of how many times 1 feature was greater than another:
 
-mapStates = function(df, feat){
-  dat = data.frame(table(df[,feat]))
-  names(dat) = c("state.abb", "value")
-  dat$states <- tolower(state.name[match(dat$state.abb,  state.abb)])
-  
+![Feature Generation](../images/how_many_times_greater.png)
 
-  idx <- match(unique(nms),  dat$states)
-  dat2 <- data.frame(value = dat$value[idx], state = unique(nms))
-  row.names(dat2) <- unique(nms) 
-  USAsp <- SpatialPolygonsDataFrame(USApolygons,  data = dat2)
-  spplot(USAsp['value'], main=paste(feat, "value count"), col.regions=rev(heat.colors(21)))
-}
-grid.arrange(mapStates(train_char, "VAR_0274"), mapStates(train_char, "VAR_0237"),ncol=2)
-```
-
-  
-Now lets look at the number of unique values per column.
-```{r  warning=FALSE, message=FALSE,  fig.width = 12, fig.height = 6}
-num_ct = sapply(train_numr, function(x) length(unique(x)))
-char_ct = sapply(train_char, function(x) length(unique(x)))
-date_ct = sapply(train_date, function(x) length(unique(x)))
-all_ct = rbind(data.frame(count=num_ct, type="Numerical"), 
-               data.frame(count=char_ct, type="Character"), 
-               data.frame(count=date_ct, type="Date"))
-# lets plot the unique values per feature
-g1 = ggplot(all_ct, aes(x = count, fill=type)) + 
-   geom_histogram(binwidth = 1, alpha=0.7, position="identity") + 
-   xlab("Unique values per feature (0-100)")+ theme(legend.position = "none") + 
-   xlim(c(0,100)) +theme(axis.title.x=element_text(size=14, ,face="bold"))
-g2 = ggplot(all_ct, aes(x = count, fill=type)) +  
-   geom_histogram(binwidth = 100, alpha=0.7, position="identity") + 
-   xlab("Unique values per feature(101+)")  + xlim(c(101,nrow(train))) +
-   theme(axis.title.x=element_text(size=14, ,face="bold"))
-grid.arrange(g1, g2, ncol=2)
-```
-
-  
-Lets look at the number of NA's per feature type (Numeric, Character or String).
-```{r  warning=FALSE, message=FALSE, fig.width = 8, fig.height = 6}
-num_na = sapply(train_numr, function(x) sum(is.na(x)))
-char_na = sapply(train_char, function(x) sum(is.na(x)))
-date_na = sapply(train_date, function(x) sum(is.na(x)))
-all_na = rbind(data.frame(count=num_na, type="Numerical"), 
-               data.frame(count=char_na, type="Character"), 
-               data.frame(count=date_na, type="Date"))
-#table(all_na)
-all_na = data.frame(all_na)
-all_na = all_na[all_na$count>0,]
-
-breaks <- c(5,10,50,100,500,1000,2000)
-
-ggplot(all_na, aes(x = count, fill=type)) +  
-  geom_histogram(alpha=0.7) + 
-#  scale_y_log10(limits=c(1,2000), breaks=breaks) + 
-  scale_x_log10(limits=c(1,20000), breaks=c(breaks,5000,10000,20000)) + 
-  labs(title="Histogram of feature count per NA count", size=24, face="bold") +
-  theme(plot.title = element_text(size = 16, face = "bold")) +
-  xlab("NA Count") + ylab("Feature Count")
-
-```
-  
-Now we drill down on the numerical values. We randomly sample the rows to look at.
-```{r  warning=FALSE, message=FALSE}
-set.seed(200)
-train_numr_samp = train_numr[,sample(1:ncol(train_numr),100)]
-str(lapply(train_numr_samp[,sample(1:100)], unique))
-```
-  
-Lets take a look at 100 sample numerical records.
-We shall impute -99999999 to the missing values and check for non-unique columns
-
-```{r  warning=FALSE, message=FALSE}
-train_numr_samp[is.na(train_numr_samp)] = -99999999
-length(colnames(train_numr[,sapply(train_numr, function(v) var(v, na.rm=TRUE)==0)]))
-```
-  
-Check the highly correlated numerical values from this sampled set.
-We get quite different results using different metrics.
-```{r echo=FALSE, warning=FALSE, message=FALSE}
-dev.off()
-```
-
-```{r  warning=FALSE, message=FALSE, fig.width = 8, fig.height = 8}
-#compute the correlation matrix
-descrCor_pear <-  cor(scale(train_numr_samp,center=TRUE,scale=TRUE), method="pearson")
-descrCor_spea <-  cor(scale(train_numr_samp,center=TRUE,scale=TRUE), method="spearman")
-# Kendall takes to long to run
-# descrCor_kend <-  cor(scale(train_numr_samp,center=TRUE,scale=TRUE), method="kendall")
-#visualize the matrix, clustering features by correlation index.
-corrplot(descrCor_pear, order = "hclust", mar=c(0,0,1,0), tl.pos="n", main="Pearson correlation of 100 sampled numerical features")
-corrplot(descrCor_spea, order = "hclust", mar=c(0,0,1,0), tl.pos="n", main="Spearman correlation of 100 sampled numerical features")
-```
-
-Now lets check the cumulative distribution of correlation within these 100 sampled numericalcolumns.
-The below plot shows the proportion of features containing a max correlation to another feature below the correlation threshold. 
-
-```{r  warning=FALSE, message=FALSE,  fig.width = 6, fig.height = 6}
-corr.df = expand.grid(corr_limit=(0:100)/100, perc_feat_pear=NA, perc_feat_spea=NA)
-for(i in 0:100){
-  corr.df$perc_feat_pear[i+1]=length(findCorrelation(descrCor_pear, i/100))
-  corr.df$perc_feat_spea[i+1]=length(findCorrelation(descrCor_spea, i/100))
-}
-
-plot(corr.df$corr_limit, abs(100-corr.df$perc_feat_pear), pch=19, col="blue",
-     ylab = "Feature % falling below abs(correlation)", xlab="Absolute Correlation",
-     main="Cumulative distribution of correlation\n(Within 100 sampled numerical features)")
-abline(h=(0:10)*10, v=(0:20)*.05, col="gray", lty=3)
-points(corr.df$corr_limit, abs(100-corr.df$perc_feat_pear), pch=19, col="blue")
-points(corr.df$corr_limit, abs(100-corr.df$perc_feat_spea), pch=19, col="red")
-legend("topleft", c("Pearson", "Spearman"), col = c("blue", "red"), pch = 19, bg="white")
-```
-
-The distribution of the outcome:
-
-```{r  warning=FALSE, message=FALSE,  fig.width = 6, fig.height = 6}
-hist(y, main="Binary Target")
-```
 
 
 ## Modeling
 
+This morning I trained the following models:
+
+ * Gradient Boosting
+ * Random Forest
+ * Logit
+ * Neural Network
+ * eXtreme Gradient Boosting
+ 
+Base learners were input to a stacked ensemble (superlearner).
+
+### XGB 
+```{r}
+# ##########################################
+# # File:            xgb.R                 #
+# # Context:         Run by Master file    #
+# # Contact author:  Miller, J.            #
+# # Initial Date:    2019-04-04            #
+# # Version:         0.0.1                 #
+# ##########################################
+# 
+# setdiff2(colnames(train),
+#          colnames(test))
+# 
+# cat("training a XGBoost classifier\n")
+# clf <- xgboost(data        = data.matrix(train[,!colnames(train) %in% c("Y", "target", "ID")]),
+#                label       = train$Y,
+#                nrounds     = 20,
+#                objective   = "binary:logistic",
+#                eval_metric = "auc")
+# saveRDS(clf, "clf.RDS")
+# 
+# cat("making predictions in batches due to 8GB memory limitation\n")
+# submission <- data.frame(ID=test$ID)
+# submission$target <- NA 
+# 
+# # predict in chunks
+# for (rows in split(1:nrow(test), ceiling((1:nrow(test))/10000))) {
+#   submission[rows, "target"] <- predict(clf, data.matrix(test[rows, colnames(test) %in% clf$feature_names]))
+# }
+# 
+# 
+# cat("saving the output file... \n")
+# write_csv(submission, "xgboost_submission.csv")
+
+```
+
+
+### H2O
+
+```{r}
+# ##########################################
+# # File:            ml1.R                 #
+# # Context:         Run by Master file    #
+# # Contact author:  Miller, J.            #
+# # Initial Date:    2019-04-04            #
+# # Version:         0.0.1                 #
+# # Description:     NN Metalearning       #
+# ##########################################
+# 
+# 
+# 
+# h2o.init()
+# 
+# train <- readRDS("train_checkpoint1.RDS")
+# test  <- readRDS("test_checkpoint1.RDS")
+# 
+# # Number of folds for CV
+# nfolds <- 5  
+# 
+# # Identify predictors and response
+# y <- "Y"
+# x <- setdiff(names(train), y)
+# 
+# # For binary classification, response should be a factor
+# train.h2o <- as.h2o(train[1:(nrow(train)-5000),])
+# test.h2o  <- as.h2o(train[(nrow(train)-5000+1):nrow(train),])
+# 
+# train.h2o[,y] <- as.factor(train.h2o$Y)
+# test.h2o[,y]  <- as.factor(test.h2o$Y)
+# 
+# 
+# # Base Learning
+# glm1 <- h2o.glm(x = x, y = y, family = "binomial", 
+#                 training_frame = train.h2o,
+#                 nfolds = nfolds,
+#                 fold_assignment = "Modulo",
+#                 keep_cross_validation_predictions = TRUE)
+# h2o.saveModel(glm1, "h2o_glm1")
+# # [1] "C:\\Users\\jmiller\\Desktop\\response_modeling\\data\\h2o_glm1\\GLM_model_R_1554476314148_1"
+# 
+# gbm1 <- h2o.gbm(x = x, y = y, distribution = "bernoulli",
+#                 training_frame = train.h2o,
+#                 seed = 1,
+#                 nfolds = nfolds,
+#                 fold_assignment = "Modulo",
+#                 keep_cross_validation_predictions = TRUE)
+# 
+# rf1 <- h2o.randomForest(x = x, y = y, # distribution not used for RF
+#                         training_frame = train.h2o,
+#                         seed = 1,
+#                         nfolds = nfolds,
+#                         fold_assignment = "Modulo",
+#                         keep_cross_validation_predictions = TRUE)
+# 
+# dl1 <- h2o.deeplearning(x = x, y = y, distribution = "bernoulli",
+#                         training_frame = train.h2o,
+#                         nfolds = nfolds,
+#                         fold_assignment = "Modulo",
+#                         keep_cross_validation_predictions = TRUE)
+# 
+# models <- list(glm1, gbm1, rf1, dl1)
+# metalearner <- "h2o.glm.wrapper"
+# 
+# ensemble <- h2o.stackedEnsemble(x = x,
+#                                 y = y,
+#                                 training_frame = train.h2o,
+#                                 model_id = "my_ensemble_binomial",
+#                                 base_models = list(dl1, rf1, gbm1))
+# 
+# 
+# # Compute test set performance on OOF holdout:
+# perf <- h2o.performance(ensemble, newdata = test.h2o)
+# print(perf)
+# 
+# h2o.saveModel(rf1,"h2o_rf1")
+# h2o.saveModel(dl1,"h2o_dl1")
+# h2o.saveModel(ensemble, "h2o_stack")
+# 
+#h2o.shutdown()
+```
+ 
 
 ## Validation
+
+Repeated k-fold validation was performed in-sample during training time. 50% of the final data was saved as a holdout for final validation.
+
+Our final validation AUC was
+
+        0.80011
+
+Which would have earned a rank of 11th place, however I benefited from knowledge and libraries only available after the competition.
+
+```{r}
+# H2OBinomialMetrics: stackedensemble
+# 
+# MSE:  0.1039833
+# RMSE:  0.3224644
+# LogLoss:  0.3752801
+# Mean Per-Class Error:  0.2087087
+# AUC:  0.80011
+# 
+# Confusion Matrix (vertical: actual; across: predicted) for F1-optimal threshold:
+#           0    1    Error        Rate
+# 0      2728 1087 0.284928  =1087/3815
+# 1       294  891 0.2481013   =294/1185
+# Totals 3022 1978 0.276200  =1381/5000
+
+```
+
+
+## Next Steps
+
+There were a lot of things I'd do in real life, which time did not allow for.
+
+These include:
+
+  * Advanced EDA
+  * Target Encoding
+  * More baselaerners
+  * 3rd-stage ensemble combining xgboost, caret, and h2o
+  
+  
