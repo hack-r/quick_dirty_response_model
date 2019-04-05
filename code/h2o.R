@@ -7,13 +7,6 @@
 # Description:     NN Metalearning       #
 ##########################################
 
-# The h2o.stack function is an alternative to the h2o.ensemble function, which
-# allows the user to specify H2O models individually and then stack them together
-# at a later time.  Saved models, re-loaded from disk, can also be stacked.
-
-# The base models must use identical cv folds; this can be achieved in two ways:
-# 1. they be specified explicitly by using the fold_column argument, or
-# 2. use same value for `nfolds` and set `fold_assignment = "Modulo"`
 
 
 h2o.init()
@@ -68,19 +61,19 @@ dl1 <- h2o.deeplearning(x = x, y = y, distribution = "bernoulli",
 models <- list(glm1, gbm1, rf1, dl1)
 metalearner <- "h2o.glm.wrapper"
 
-stack <- h2o.stack(models = models,
-                   response_frame = train.h2o[,y],
-                   metalearner = metalearner, 
-                   seed = 1,
-                   keep_levelone_data = TRUE)
+ensemble <- h2o.stackedEnsemble(x = x,
+                                y = y,
+                                training_frame = train.h2o,
+                                model_id = "my_ensemble_binomial",
+                                base_models = list(dl1, rf1, gbm1))
 
 
 # Compute test set performance on OOF holdout:
-perf <- h2o.ensemble_performance(stack, newdata = test.h2o)
+perf <- h2o.performance(ensemble, newdata = test.h2o)
 print(perf)
 
 h2o.saveModel(rf1,"h2o_rf1")
 h2o.saveModel(dl1,"h2o_dl1")
-h2o.saveModel(stack, "h2o_stack")
+h2o.saveModel(ensemble, "h2o_stack")
 
 h2o.shutdown()
