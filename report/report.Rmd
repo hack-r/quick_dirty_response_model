@@ -1,0 +1,273 @@
+---
+title: "Simulated Response Modeling"
+author: "Miller, J."
+date: "April 4, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/users/jmiller/Desktop/response_modeling/data')
+```
+
+## Overview
+
+Analysis and modeling of customer, citizen, or patient response to outreach is a ubiquitous use case for Data Science (DS), with elevated prevalence and return-on-investment (ROI) in the areas of advertising and marketing.
+
+This presentation leverages public data and open source technologies to demonstrate a curated subset of Data Science strategies for such response analytic and modeling.
+
+Public data was taken from [a Kaggle competition](https://www.kaggle.com/c/springleaf-marketing-response) (circa 2016) sponsored by Springleaf - a lending organization now known as [OneMain Financial](https://www.onemainfinancial.com/ppc/v7).
+
+
+## Springleaf Competition Details
+
+A few notes about the original competition this data comes from:
+
+ * Took place in 2016 
+ * 2,226 Data Science teams participated (approx. 5,000-7,000 total participants)
+ * $100,000 USD prize 
+ * Winning team ("Asian Ensemble") had 6 members from Stanford University
+ * About 200 teams' models performed within 1% as good as 1st place
+ * Jason's former instructor ranked 6th
+
+![Finalized Private Leaderboard from Springleaf](../images/private_leaderboard.png)
+ 
+Although Jason was on Kaggle at the time, Pareto's law dictated that he allocate the after-hours DS to StackOverflow and Coursera instead of Springleaf.  
+
+
+## Springleaf Data Description (official)
+
+You are provided a high-dimensional data set of anonymized customer information. Each row corresponds to one customer. The response variable is binary and labeled "target". You must predict the target variable for every row in the test set.
+
+The features have been anonymized to protect privacy and are comprised of a mix of continuous and categorical features. You will encounter many "placeholder" values in the data, which represent cases such as missing values. We have intentionally preserved their encoding to match with internal systems at Springleaf. The meaning of the features, their values, and their types are provided "as-is" for this competition; handling a huge number of messy features is part of the challenge here.
+
+
+## Springleaf Evaluation Metric
+
+For this competition results were evaluated on [area under the ROC](https://en.wikipedia.org/wiki/Receiver_operating_characteristic) (AUC) curve between the predicted probability and the observed target.
+
+The ROC curve is created by plotting the true positive rate (TPR) against the false positive rate (FPR) at various threshold settings. The true-positive rate is also known as sensitivity, recall or probability of detection[4] in machine learning. The false-positive rate is also known as the fall-out or probability of false alarm[4] and can be calculated as (1 − specificity).  
+
+
+## Additional Data Notes (from Jason)
+
+ * The data set physical memory size was approximately 2GB (train and test combined)
+ * Training and Testing data sets each had about 145,000 rows of observations
+ * Training and Testing data sets each had about 2,000 columns of raw features (slightly fewer)
+ 
+
+## Interview vs. Competition
+
+For the purposes of this interview I'd like to both show a competition-suitable response model and demonstrate a few additional industry-relavent concepts.  
+
+
+## Methodology
+
+A multi-phase ensemble strategy employed to validate and compare several specifications, base learner algorithms 
+
+
+
+## EDA
+
+#### The proportion of NA values.
+```{r warning=FALSE, message=FALSE}
+train <- readRDS("train.RDS")
+test  <- readRDS("test.RDS")
+length(train[is.na(train)])/(ncol(train)*nrow(train)) 
+```
+
+Check for dupicate rows.
+```{r warning=FALSE, message=FALSE}
+nrow(train) - nrow(unique(train))
+```
+
+Lets look at the columns with only one unique value.
+```{r warning=FALSE, message=FALSE}
+col_ct = sapply(train, function(x) length(unique(x)))
+cat("Constant feature count:", length(col_ct[col_ct==1]))
+# we can just remove these columns
+train = train[, !names(train) %in% names(col_ct[col_ct==1])]
+```
+
+Identify and separate the numeric and non numeric rows.
+```{r warning=FALSE, message=FALSE}
+train_numr = train[, sapply(train, is.numeric)]
+train_char = train[, sapply(train, is.character)]
+cat("Numerical column count : ", dim(train_numr)[2], 
+    "; Character column count : ", dim(train_char)[2])
+```
+
+Lets digs into the character features. 
+```{r  warning=FALSE, message=FALSE}
+str(lapply(train_char, unique), vec.len = 4)
+```
+
+It looks like NA is represented in character columns by -1 or [] or blank values, lets convert these to explicit NAs.
+Not entirely sure this is the right thing to do as there are real NA values, as well as -1 values already existing, however it can be tested in predictive performance.
+```{r  warning=FALSE, message=FALSE}
+train_char[train_char==-1] = NA
+train_char[train_char==""] = NA
+train_char[train_char=="[]"] = NA
+```
+
+We place the date columns in a new dataframe and parse the dates
+```{r  warning=FALSE, message=FALSE}
+train_date = train_char[,grep("JAN1|FEB1|MAR1", train_char),]
+```
+
+Now lets separate out the dates from the character columns and look at them further.
+```{r  warning=FALSE, message=FALSE}
+train_char = train_char[, !colnames(train_char) %in% colnames(train_date)]
+train_date = sapply(train_date, function(x) strptime(x, "%d%B%y:%H:%M:%S"))
+train_date = do.call(cbind.data.frame, train_date)
+```
+
+Take out the times to a different data frame.
+```{r  warning=FALSE, message=FALSE}
+train_time = train_date[,colnames(train_date) %in% c("VAR_0204","VAR_0217")]
+train_time = data.frame(sapply(train_time, function(x) strftime(x, "%H:%M:%S")))
+train_hour = as.data.frame(sapply(train_time, function(x) as.numeric(as.character(substr( x ,1, 2)))))
+```
+  
+Plot histogram of dates.
+```{r  warning=FALSE, message=FALSE,  fig.width = 8, fig.height = 6}
+par(mar=c(2,2,2,2),mfrow=c(4,4))
+for(i in 1:16) hist(train_date[,i], "weeks", format = "%d %b %y", main = colnames(train_date)[i], xlab="", ylab="")
+```
+
+  
+Plot histogram of times.
+```{r  warning=FALSE, message=FALSE,  fig.width = 5, fig.height = 3}
+par(mar=c(2,2,2,2),mfrow=c(1,2))
+for(i in 1:2) hist(train_hour[,i], main = paste(colnames(train_hour)[i], "hourly"), breaks = c(0:24), xlab="", ylab="")
+```
+  
+Here we take a look at the geographical break down of the state features.
+```{r  warning=FALSE, message=FALSE,  fig.width = 10, fig.height = 5}
+mapUSA <- map('state', fill=TRUE, plot=FALSE)
+nms <- sapply(strsplit(mapUSA$names,  ':'),  function(x)x[1])
+USApolygons <- map2SpatialPolygons(mapUSA,  IDs = nms,  CRS('+proj=longlat'))
+
+mapStates = function(df, feat){
+  dat = data.frame(table(df[,feat]))
+  names(dat) = c("state.abb", "value")
+  dat$states <- tolower(state.name[match(dat$state.abb,  state.abb)])
+  
+
+  idx <- match(unique(nms),  dat$states)
+  dat2 <- data.frame(value = dat$value[idx], state = unique(nms))
+  row.names(dat2) <- unique(nms) 
+  USAsp <- SpatialPolygonsDataFrame(USApolygons,  data = dat2)
+  spplot(USAsp['value'], main=paste(feat, "value count"), col.regions=rev(heat.colors(21)))
+}
+grid.arrange(mapStates(train_char, "VAR_0274"), mapStates(train_char, "VAR_0237"),ncol=2)
+```
+
+  
+Now lets look at the number of unique values per column.
+```{r  warning=FALSE, message=FALSE,  fig.width = 12, fig.height = 6}
+num_ct = sapply(train_numr, function(x) length(unique(x)))
+char_ct = sapply(train_char, function(x) length(unique(x)))
+date_ct = sapply(train_date, function(x) length(unique(x)))
+all_ct = rbind(data.frame(count=num_ct, type="Numerical"), 
+               data.frame(count=char_ct, type="Character"), 
+               data.frame(count=date_ct, type="Date"))
+# lets plot the unique values per feature
+g1 = ggplot(all_ct, aes(x = count, fill=type)) + 
+   geom_histogram(binwidth = 1, alpha=0.7, position="identity") + 
+   xlab("Unique values per feature (0-100)")+ theme(legend.position = "none") + 
+   xlim(c(0,100)) +theme(axis.title.x=element_text(size=14, ,face="bold"))
+g2 = ggplot(all_ct, aes(x = count, fill=type)) +  
+   geom_histogram(binwidth = 100, alpha=0.7, position="identity") + 
+   xlab("Unique values per feature(101+)")  + xlim(c(101,nrow(train))) +
+   theme(axis.title.x=element_text(size=14, ,face="bold"))
+grid.arrange(g1, g2, ncol=2)
+```
+
+  
+Lets look at the number of NA's per feature type (Numeric, Character or String).
+```{r  warning=FALSE, message=FALSE, fig.width = 8, fig.height = 6}
+num_na = sapply(train_numr, function(x) sum(is.na(x)))
+char_na = sapply(train_char, function(x) sum(is.na(x)))
+date_na = sapply(train_date, function(x) sum(is.na(x)))
+all_na = rbind(data.frame(count=num_na, type="Numerical"), 
+               data.frame(count=char_na, type="Character"), 
+               data.frame(count=date_na, type="Date"))
+#table(all_na)
+all_na = data.frame(all_na)
+all_na = all_na[all_na$count>0,]
+
+breaks <- c(5,10,50,100,500,1000,2000)
+
+ggplot(all_na, aes(x = count, fill=type)) +  
+  geom_histogram(alpha=0.7) + 
+#  scale_y_log10(limits=c(1,2000), breaks=breaks) + 
+  scale_x_log10(limits=c(1,20000), breaks=c(breaks,5000,10000,20000)) + 
+  labs(title="Histogram of feature count per NA count", size=24, face="bold") +
+  theme(plot.title = element_text(size = 16, face = "bold")) +
+  xlab("NA Count") + ylab("Feature Count")
+
+```
+  
+Now we drill down on the numerical values. We randomly sample the rows to look at.
+```{r  warning=FALSE, message=FALSE}
+set.seed(200)
+train_numr_samp = train_numr[,sample(1:ncol(train_numr),100)]
+str(lapply(train_numr_samp[,sample(1:100)], unique))
+```
+  
+Lets take a look at 100 sample numerical records.
+We shall impute -99999999 to the missing values and check for non-unique columns
+
+```{r  warning=FALSE, message=FALSE}
+train_numr_samp[is.na(train_numr_samp)] = -99999999
+length(colnames(train_numr[,sapply(train_numr, function(v) var(v, na.rm=TRUE)==0)]))
+```
+  
+Check the highly correlated numerical values from this sampled set.
+We get quite different results using different metrics.
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+dev.off()
+```
+
+```{r  warning=FALSE, message=FALSE, fig.width = 8, fig.height = 8}
+#compute the correlation matrix
+descrCor_pear <-  cor(scale(train_numr_samp,center=TRUE,scale=TRUE), method="pearson")
+descrCor_spea <-  cor(scale(train_numr_samp,center=TRUE,scale=TRUE), method="spearman")
+# Kendall takes to long to run
+# descrCor_kend <-  cor(scale(train_numr_samp,center=TRUE,scale=TRUE), method="kendall")
+#visualize the matrix, clustering features by correlation index.
+corrplot(descrCor_pear, order = "hclust", mar=c(0,0,1,0), tl.pos="n", main="Pearson correlation of 100 sampled numerical features")
+corrplot(descrCor_spea, order = "hclust", mar=c(0,0,1,0), tl.pos="n", main="Spearman correlation of 100 sampled numerical features")
+```
+
+Now lets check the cumulative distribution of correlation within these 100 sampled numericalcolumns.
+The below plot shows the proportion of features containing a max correlation to another feature below the correlation threshold. 
+
+```{r  warning=FALSE, message=FALSE,  fig.width = 6, fig.height = 6}
+corr.df = expand.grid(corr_limit=(0:100)/100, perc_feat_pear=NA, perc_feat_spea=NA)
+for(i in 0:100){
+  corr.df$perc_feat_pear[i+1]=length(findCorrelation(descrCor_pear, i/100))
+  corr.df$perc_feat_spea[i+1]=length(findCorrelation(descrCor_spea, i/100))
+}
+
+plot(corr.df$corr_limit, abs(100-corr.df$perc_feat_pear), pch=19, col="blue",
+     ylab = "Feature % falling below abs(correlation)", xlab="Absolute Correlation",
+     main="Cumulative distribution of correlation\n(Within 100 sampled numerical features)")
+abline(h=(0:10)*10, v=(0:20)*.05, col="gray", lty=3)
+points(corr.df$corr_limit, abs(100-corr.df$perc_feat_pear), pch=19, col="blue")
+points(corr.df$corr_limit, abs(100-corr.df$perc_feat_spea), pch=19, col="red")
+legend("topleft", c("Pearson", "Spearman"), col = c("blue", "red"), pch = 19, bg="white")
+```
+
+The distribution of the outcome:
+
+```{r  warning=FALSE, message=FALSE,  fig.width = 6, fig.height = 6}
+hist(y, main="Binary Target")
+```
+
+
+## Modeling
+
+
+## Validation
